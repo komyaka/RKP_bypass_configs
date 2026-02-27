@@ -4,30 +4,6 @@
       "type": "vless",
       "tag": "Reality%2C%20Avito%20%5B%23%D0%A0%D0%9A%D0%9F%5D",
       "name": "Reality%2C%20Avito%20%5B%23%D0%A0%D0%9A%D0%9F%5D",
-      "server": "144.31.178.150",
-      "server_port": 8443,
-      "uuid": "eb162ab1-a006-4931-b1b3-8fc88a22b10e",
-      "flow": "xtls-rprx-vision",
-      "tls": {
-        "enabled": true,
-        "server_name": "01.img.avito.st",
-        "reality": {
-          "enabled": true,
-          "public_key": "JmO_njtIe9q7HRanm_dx4BtPAGCkycJuDskOISPx_Sg",
-          "short_id": ""
-        }
-      },
-      "transport": {
-        "type": "xhttp",
-        "path": "%2Fapi%2Fv2%2Fupdates",
-        "service_name": "",
-        "host": ""
-      }
-    },
-    {
-      "type": "vless",
-      "tag": "Reality%2C%20Avito%20%5B%23%D0%A0%D0%9A%D0%9F%5D",
-      "name": "Reality%2C%20Avito%20%5B%23%D0%A0%D0%9A%D0%9F%5D",
       "server": "144.31.178.168",
       "server_port": 8443,
       "uuid": "eb162ab1-a006-4931-b1b3-8fc88a22b10e",
