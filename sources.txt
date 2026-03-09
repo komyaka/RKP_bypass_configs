@@ -1,3 +1,9 @@
 https://raw.githubusercontent.com/Argh73/VpnConfigCollector/refs/heads/main/Splitted-By-Country/Russia.txt
 https://raw.githubusercontent.com/Omid-0x0x0x/vless/main/configs/vless_config_73.txt
 https://raw.githubusercontent.com/WhitePrime/xraycheck/main/configs/white-list_available(top100)
+https://raw.githubusercontent.com/mohamadfg-dev/telegram-v2ray-configs-collector/refs/heads/main/category/vless.txt
+https://raw.githubusercontent.com/sevcator/5ubscrpt10n/refs/heads/main/working/countries/Russia.txt
+https://raw.githubusercontent.com/vpnineh/config/main/sub/mix_protocol/mix_vless_5.txt
+https://github.com/Urbanica/vpn-sub/raw/main/sub.txt
+https://raw.githubusercontent.com/Omid-0x0x0x/vless/main/configs/vless_config_80.txt
+https://github.com/LimeHi/LimeVPN/raw/main/LimeVPN.txt
