@@ -1159,6 +1159,90 @@ def filter_by_sni(vless_url: str, whitelist_domains: set, whitelist_suffixes: li
     return False
 
 
+# ========= ГЕОЛОКАЦИЯ IP =========
+_ip_country_cache: dict = {}
+
+
+def extract_host_from_vless(url: str) -> Optional[str]:
+    """Извлекает хост (IP или домен) из VLESS URL"""
+    try:
+        content = url[len("vless://"):]
+        after_at = content.split("@", 1)[1]
+        host_part = after_at.split("?", 1)[0].split("#", 1)[0]
+        if ":" in host_part:
+            return host_part.split(":", 1)[0]
+        return host_part
+    except Exception:
+        return None
+
+
+def country_code_to_flag(country_code: str) -> str:
+    """Конвертирует двухбуквенный код страны в emoji флага"""
+    try:
+        code = country_code.upper()
+        if len(code) != 2 or not code.isalpha():
+            return '🌐'
+        return ''.join(chr(0x1F1E6 + ord(c) - ord('A')) for c in code)
+    except Exception:
+        return '🌐'
+
+
+def get_ip_country_batch(hosts: list) -> None:
+    """Заполняет кэш стран для списка IP-адресов/хостов через batch API ip-api.com"""
+    uncached = [h for h in hosts if h and h not in _ip_country_cache]
+    if not uncached:
+        return
+    for i in range(0, len(uncached), 100):
+        batch = uncached[i:i + 100]
+        try:
+            response = requests.post(
+                'http://ip-api.com/batch?fields=query,status,countryCode,country',
+                json=batch,
+                timeout=15
+            )
+            if response.status_code == 200:
+                for item in response.json():
+                    host = item.get('query', '')
+                    if host:
+                        if item.get('status') == 'success':
+                            _ip_country_cache[host] = (
+                                item.get('countryCode', 'XX'),
+                                item.get('country', 'Unknown')
+                            )
+                        else:
+                            _ip_country_cache[host] = ('XX', 'Unknown')
+        except Exception:
+            for host in batch:
+                _ip_country_cache[host] = ('XX', 'Unknown')
+        # Respect batch rate limit (~15 requests/minute)
+        if i + 100 < len(uncached):
+            time.sleep(4.1)
+
+
+def get_ip_country(host: str) -> tuple:
+    """Определяет страну по IP-адресу или домену. Возвращает (country_code, country_name)"""
+    if not host:
+        return ('XX', 'Unknown')
+    if host in _ip_country_cache:
+        return _ip_country_cache[host]
+    try:
+        resp = requests.get(
+            f'http://ip-api.com/json/{host}?fields=status,countryCode,country',
+            timeout=5
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('status') == 'success':
+                result = (data.get('countryCode', 'XX'), data.get('country', 'Unknown'))
+                _ip_country_cache[host] = result
+                return result
+    except Exception:
+        pass
+    result = ('XX', 'Unknown')
+    _ip_country_cache[host] = result
+    return result
+
+
 # ========= СКАЧИВАНИЕ =========
 async def fetch(session, url, sem):
     async with sem:
@@ -1265,7 +1349,7 @@ async def filter_vless():
 
 # ========= ПЕРЕИМЕНОВАНИЕ =========
 async def rename_configs():
-    print("\n=== Переименование конфигов по протоколу и SNI ===")
+    print("\n=== Переименование конфигов по стране IP ===")
 
     if not os.path.exists(FILTERED_FILE):
         print("Нет файла url_filtered.txt — пропускаю переименование.")
@@ -1273,45 +1357,72 @@ async def rename_configs():
 
     try:
         with open(FILTERED_FILE, "r", encoding="utf-8", errors="ignore") as f:
-            total = sum(1 for _ in f)
-    except:
-        total = 0
-        
-    processed = 0
+            urls = [line.strip() for line in f if line.strip()]
+    except Exception:
+        print("Ошибка чтения файла")
+        return
 
-    async with aiofiles.open(FILTERED_FILE, "r", encoding="utf-8") as f_in, \
-               aiofiles.open(NAMED_FILE, "w", encoding="utf-8") as f_out:
+    total = len(urls)
 
-        async for line in f_in:
-            processed += 1
-            url = line.strip()
-            if not url:
-                continue
+    # Collect unique hosts for batch geolocation
+    unique_hosts = list({
+        host
+        for url in urls
+        for host in [extract_host_from_vless(url)]
+        if host
+    })
+    if unique_hosts:
+        print(f"🌍 Геолокация {len(unique_hosts)} уникальных хостов...")
+        get_ip_country_batch(unique_hosts)
 
-            protocol = detect_protocol(url)
-            
-            domains = extract_all_possible_domains(url)
-            human_name = "Неизвестно"
-            
-            if domains:
-                for domain in domains:
-                    name = get_human_name(domain)
-                    if name != "Неизвестно":
-                        human_name = name
-                        break
-                if human_name == "Неизвестно" and domains:
-                    human_name = domains[0].split('.')[-2].capitalize() if len(domains[0].split('.')) >= 2 else domains[0]
-
-            title = f"{protocol}, {human_name} [#РКП]"
+    counter = 0
+    async with aiofiles.open(NAMED_FILE, "w", encoding="utf-8") as f_out:
+        for url in urls:
+            counter += 1
+            host = extract_host_from_vless(url)
+            country_code, country_name = get_ip_country(host) if host else ('XX', 'Unknown')
+            flag = country_code_to_flag(country_code)
+            title = f"{flag} {country_name} {counter}"
             base = url.split("#", 1)[0]
-            new_url = f"{base}#{title}"
+            await f_out.write(f"{base}#{title}\n")
 
-            await f_out.write(new_url + "\n")
+            if counter % 500 == 0 and total > 0:
+                print(f"Переименовано: {counter}/{total}", end="\r")
 
-            if processed % 500 == 0 and total > 0:
-                print(f"Переименовано: {processed}/{total}", end="\r")
+    print(f"\nПереименование завершено. Итог: {counter} конфигов.")
 
-    print(f"\nПереименование завершено. Итог: {processed} конфигов.")
+
+async def renumber_work_configs():
+    """Перенумеровывает конфиги в url_work.txt и url_work_speed.txt по стране IP"""
+    for file_path in [WORK_FILE, SPEED_FILE]:
+        if not os.path.exists(file_path):
+            continue
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                urls = [line.strip() for line in f if line.strip()]
+        except Exception:
+            continue
+
+        # Ensure all hosts are geolocated (use cache from rename step when possible)
+        unique_hosts = list({
+            host
+            for url in urls
+            for host in [extract_host_from_vless(url)]
+            if host
+        })
+        if unique_hosts:
+            get_ip_country_batch(unique_hosts)
+
+        async with aiofiles.open(file_path, "w", encoding="utf-8") as f_out:
+            for counter, url in enumerate(urls, 1):
+                host = extract_host_from_vless(url)
+                country_code, country_name = get_ip_country(host) if host else ('XX', 'Unknown')
+                flag = country_code_to_flag(country_code)
+                title = f"{flag} {country_name} {counter}"
+                base = url.split("#", 1)[0]
+                await f_out.write(f"{base}#{title}\n")
+
+        print(f"✅ Перенумеровано {len(urls)} конфигов в {file_path}")
 
 
 # ========= НОРМАЛИЗАЦИЯ И КОДИРОВАНИЕ URL =========
@@ -2059,6 +2170,8 @@ async def main_cycle():
     
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, tester.run)
+
+    await renumber_work_configs()
 
 
 async def run_forever():
