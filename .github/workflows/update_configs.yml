@@ -13,11 +13,8 @@ permissions:
 jobs:
   update-configs:
     name: Парсинг и обновление конфигов
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      PYTHONIOENCODING: utf-8
-      PYTHONUTF8: 1
 
     steps:
       - name: Клонирование репозитория
@@ -39,30 +36,26 @@ jobs:
         timeout-minutes: 20
 
       - name: Копирование результатов в папку configs
-        shell: pwsh
         run: |
-          $files = @("url_work.txt", "url_work_speed.txt")
-          foreach ($file in $files) {
-            if (Test-Path $file) {
-              Copy-Item $file "configs\$file" -Force
-              Write-Host "✅ $file скопирован"
-            } else {
-              Write-Host "⚠️ $file не найден"
-            }
-          }
+          for file in url_work.txt url_work_speed.txt; do
+            if [ -f "$file" ]; then
+              cp "$file" "configs/$file"
+              echo "✅ $file скопирован"
+            else
+              echo "⚠️ $file не найден"
+            fi
+          done
 
       - name: Публикация результатов в репозиторий
-        shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add configs/url_work.txt configs/url_work_speed.txt configs/notworkers.json
-          $changes = git status --porcelain
-          if ($changes) {
-            $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm") + " UTC"
-            git commit -m "auto: обновление конфигов [$date]"
+          git add configs/url_work.txt configs/url_work_speed.txt configs/notworkers.json configs/notworkers
+          if ! git diff --staged --quiet; then
+            date=$(date -u +"%Y-%m-%d %H:%M")
+            git commit -m "auto: обновление конфигов [$date UTC]"
             git push
-            Write-Host "✅ Конфиги обновлены и опубликованы"
-          } else {
-            Write-Host "ℹ️ Новых конфигов нет, коммит не нужен"
-          }
+            echo "✅ Конфиги обновлены и опубликованы"
+          else
+            echo "ℹ️ Новых конфигов нет, коммит не нужен"
+          fi
