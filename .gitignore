@@ -20,3 +20,9 @@ debug_failed.txt
 xray_errors.log
 processed.json
 cache_results.json
+
+# Notworkers migration backups and old JSON format
+configs/notworkers.json.migrated
+configs/notworkers.json
+configs/notworkers.migrated
+configs/notworkers
