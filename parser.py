@@ -75,7 +75,7 @@ CYCLES_BEFORE_DEBUG_CLEAN = 5  # Очистка debug_failed.txt каждые 5 
 
 XRAY_MAX_WORKERS = _config.getint('threads', 'xray_max_workers', fallback=30)
 XRAY_TEST_URL = _config.get('speed', 'speed_test_url', fallback='https://www.gstatic.com/generate_204')
-XRAY_TIMEOUT = _config.getint('timeouts', 'xray_timeout', fallback=3)
+XRAY_TIMEOUT = _config.getint('timeouts', 'xray_timeout', fallback=8)
 MAX_RETRIES = _config.getint('retry', 'max_retries', fallback=3)
 RETRY_DELAY_BASE = _config.getfloat('retry', 'retry_delay_base', fallback=1.0)
 RETRY_DELAY_MULTIPLIER = _config.getfloat('retry', 'retry_delay_multiplier', fallback=2.0)
@@ -89,6 +89,9 @@ STRONG_CONNECT_TIMEOUT_MIN = 3
 STRONG_CONNECT_TIMEOUT_MAX = 10
 STRONG_READ_TIMEOUT_MIN = 5
 STRONG_ATTEMPT_DELAY = 0.5
+# Adaptive timeout: если первый запрос медленнее этого порога, таймаут для следующих увеличивается
+ADAPTIVE_TIMEOUT_THRESHOLD_SECONDS = 5.0
+ADAPTIVE_TIMEOUT_MULTIPLIER = 1.5
 # В xraycheck для generate_204 допускается только очень маленький ответ
 GENERATE_204_MAX_CONTENT_LENGTH = 64
 
@@ -106,13 +109,18 @@ _allowed_countries_raw = _config.get('geolocation', 'allowed_countries', fallbac
 ALLOWED_COUNTRIES = [c.strip().upper() for c in _allowed_countries_raw.split(',') if c.strip()]
 GEOLOCATION_TIMEOUT = _config.getint('geolocation', 'geolocation_timeout', fallback=5)
 
-# Строгий режим (для протоколов кроме VLESS, у которых уже есть сильный стиль)
-STRICT_MODE = _config.getboolean('strict', 'strict_mode', fallback=False)
+# Строгий режим (включён по умолчанию для всех протоколов)
+STRICT_MODE = _config.getboolean('strict', 'strict_mode', fallback=True)
 STRICT_ATTEMPTS = _config.getint('strict', 'strict_attempts', fallback=3)
 STRICT_MAX_RESPONSE_TIME = _config.getfloat('strict', 'strict_max_response_time', fallback=3.0)
 STRICT_TIMEOUT = _config.getint('strict', 'strict_timeout', fallback=12)
+# Минимум успешных запросов из серии (STRONG_STYLE_TEST: 2 из 3)
+MIN_SUCCESSFUL_REQUESTS = _config.getint('strict', 'min_successful_requests', fallback=2)
 
-print(f"⚡ Настройки: XRAY_MAX_WORKERS={XRAY_MAX_WORKERS}, TIMEOUT={XRAY_TIMEOUT}")
+# Проверка HTTPS через прокси
+REQUIRE_HTTPS = _config.getboolean('checker', 'require_https', fallback=True)
+
+print(f"⚡ Настройки: XRAY_MAX_WORKERS={XRAY_MAX_WORKERS}, TIMEOUT={XRAY_TIMEOUT}, STRICT_MODE={STRICT_MODE}, MIN_SUCCESSFUL={MIN_SUCCESSFUL_REQUESTS}")
 
 # ========= СЧЕТЧИК ЦИКЛОВ =========
 cycle_counter = 0
@@ -1862,7 +1870,7 @@ def load_notworkers(filepath: str) -> dict:
         return {}
 
 def save_notworkers(filepath: str, notworkers: dict):
-    """Сохраняет чёрный список в версионном JSON-формате"""
+    """Сохраняет чёрный список в версионном JSON-формате и в текстовом файле"""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     try:
         data = {
@@ -1874,6 +1882,15 @@ def save_notworkers(filepath: str, notworkers: dict):
         print(f"📝 Чёрный список сохранён: {len(notworkers)} записей")
     except Exception as e:
         print(f"⚠️ Ошибка сохранения чёрного списка: {e}")
+
+    # Также сохраняем текстовый файл (один ключ на строку) для совместимости
+    text_filepath = os.path.splitext(filepath)[0]
+    try:
+        with open(text_filepath, 'w', encoding='utf-8') as f:
+            for key in notworkers.keys():
+                f.write(key + '\n')
+    except Exception as e:
+        print(f"⚠️ Ошибка сохранения текстового чёрного списка: {e}")
 
 def update_notworkers(notworkers: dict, failed_urls: list, working_urls: list,
                       failed_errors: dict = None, notworkers_min_fails: int = 1) -> dict:
@@ -1981,6 +1998,7 @@ class XrayTester:
         self.strict_attempts = STRICT_ATTEMPTS
         self.strict_max_response_time = STRICT_MAX_RESPONSE_TIME
         self.strict_timeout = STRICT_TIMEOUT
+        self.min_successful_requests = MIN_SUCCESSFUL_REQUESTS
 
         # Счётчик ошибок по URL (thread-safe) для notworkers
         self._url_last_errors: dict = {}
@@ -2544,8 +2562,9 @@ class XrayTester:
             session.timeout = self.timeout
             
             try:
-                # Для VLESS используем строгий стиль проверки как в xraycheck:
-                # несколько подряд запросов к generate_204 с ограничением по времени ответа.
+                # STRONG_STYLE_TEST: для всех протоколов — минимум min_successful_requests из
+                # strong_style_attempts/strict_attempts запросов должны быть успешными.
+                # Это применяется к VLESS через strong_style_* настройки, к остальным через strict_*.
                 if parsed.get('protocol') == 'vless':
                     connect_timeout = max(
                         STRONG_CONNECT_TIMEOUT_MIN,
@@ -2554,30 +2573,35 @@ class XrayTester:
                     read_timeout = max(STRONG_READ_TIMEOUT_MIN, self.strong_style_timeout - connect_timeout)
                     timeout_strong = (connect_timeout, read_timeout)
                     attempts_needed = max(1, self.strong_style_attempts)
+                    min_ok = self.min_successful_requests
                     pings = []
 
                     for i in range(attempts_needed):
                         if i > 0:
                             time.sleep(STRONG_ATTEMPT_DELAY)
-                        t = time.time()
-                        r = session.get(
-                            self.test_url,
-                            timeout=timeout_strong,
-                            allow_redirects=False,
-                            verify=False
-                        )
-                        elapsed = time.time() - t
+                        try:
+                            t = time.time()
+                            r = session.get(
+                                self.test_url,
+                                timeout=timeout_strong,
+                                allow_redirects=False,
+                                verify=False
+                            )
+                            elapsed = time.time() - t
 
-                        if r.status_code not in [200, 204]:
-                            return "FAIL"
-                        if len(r.content) > GENERATE_204_MAX_CONTENT_LENGTH:
-                            return "FAIL"
-                        if self.strong_max_response_time > 0 and elapsed > self.strong_max_response_time:
-                            return "TIMEOUT"
+                            if (r.status_code in [200, 204]
+                                    and len(r.content) <= GENERATE_204_MAX_CONTENT_LENGTH
+                                    and (self.strong_max_response_time <= 0
+                                         or elapsed <= self.strong_max_response_time)):
+                                pings.append(elapsed * 1000)
+                                # Adaptive timeout: если первый запрос медленный, увеличиваем таймаут
+                                if i == 0 and elapsed > ADAPTIVE_TIMEOUT_THRESHOLD_SECONDS:
+                                    new_read = max(read_timeout, elapsed * ADAPTIVE_TIMEOUT_MULTIPLIER)
+                                    timeout_strong = (connect_timeout, new_read)
+                        except Exception:
+                            pass
 
-                        pings.append(elapsed * 1000)
-
-                    if not pings:
+                    if len(pings) < min_ok:
                         return "FAIL"
                     avg_ping = sum(pings) / len(pings)
 
@@ -2586,7 +2610,6 @@ class XrayTester:
                         for _ in range(self.stability_checks):
                             time.sleep(self.stability_delay)
                             try:
-                                t = time.time()
                                 rs = session.get(
                                     self.test_url,
                                     timeout=timeout_strong,
@@ -2600,36 +2623,43 @@ class XrayTester:
 
                     return {'working': True, 'ping': avg_ping, 'method': 'xray'}
 
-                # Для остальных протоколов: строгий режим или обычная проверка.
+                # Для остальных протоколов: строгий режим (включён по умолчанию) или обычная проверка.
                 if self.strict_mode:
-                    # Строгий режим: N последовательных запросов, все должны быть успешными
+                    # STRONG_STYLE_TEST: min_successful_requests из strict_attempts запросов должны успешно пройти
                     connect_timeout = max(
                         STRONG_CONNECT_TIMEOUT_MIN,
                         min(STRONG_CONNECT_TIMEOUT_MAX, int(self.strict_timeout * STRONG_CONNECT_TIMEOUT_RATIO))
                     )
                     read_timeout = max(STRONG_READ_TIMEOUT_MIN, self.strict_timeout - connect_timeout)
                     timeout_strict = (connect_timeout, read_timeout)
+                    min_ok = self.min_successful_requests
                     strict_pings = []
 
                     for i in range(max(1, self.strict_attempts)):
                         if i > 0:
                             time.sleep(STRONG_ATTEMPT_DELAY)
-                        t = time.time()
-                        r = session.get(
-                            self.test_url,
-                            timeout=timeout_strict,
-                            allow_redirects=False,
-                            verify=False
-                        )
-                        elapsed = time.time() - t
+                        try:
+                            t = time.time()
+                            r = session.get(
+                                self.test_url,
+                                timeout=timeout_strict,
+                                allow_redirects=False,
+                                verify=False
+                            )
+                            elapsed = time.time() - t
 
-                        if r.status_code not in [200, 204]:
-                            return "FAIL"
-                        if self.strict_max_response_time > 0 and elapsed > self.strict_max_response_time:
-                            return "TIMEOUT"
-                        strict_pings.append(elapsed * 1000)
+                            if (r.status_code in [200, 204]
+                                    and (self.strict_max_response_time <= 0
+                                         or elapsed <= self.strict_max_response_time)):
+                                strict_pings.append(elapsed * 1000)
+                                # Adaptive timeout: если первый запрос медленный, увеличиваем таймаут
+                                if i == 0 and elapsed > ADAPTIVE_TIMEOUT_THRESHOLD_SECONDS:
+                                    new_read = max(read_timeout, elapsed * ADAPTIVE_TIMEOUT_MULTIPLIER)
+                                    timeout_strict = (connect_timeout, new_read)
+                        except Exception:
+                            pass
 
-                    if not strict_pings:
+                    if len(strict_pings) < min_ok:
                         return "FAIL"
                     avg_ping = sum(strict_pings) / len(strict_pings)
 
@@ -2849,15 +2879,6 @@ class XrayTester:
         if last_error:
             with self._url_errors_lock:
                 self._url_last_errors[url] = last_error
-
-        # Fallback alt check
-        if proto in ('vless', 'trojan'):
-            alt_result = self.check_alternative_methods(parsed, url)
-            if alt_result:
-                return alt_result
-        elif proto in ('vmess', 'ss'):
-            if check_tcp_connection(parsed['host'], parsed['port'], timeout=2):
-                return {'url': url, 'ping': 200, 'method': 'tcp_check'}
 
         return None
 
