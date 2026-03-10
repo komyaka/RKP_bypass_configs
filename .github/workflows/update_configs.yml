@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: update-configs
+  cancel-in-progress: false
+
 jobs:
   update-configs:
     name: Парсинг и обновление конфигов
@@ -54,6 +58,7 @@ jobs:
           if ! git diff --staged --quiet; then
             date=$(date -u +"%Y-%m-%d %H:%M")
             git commit -m "auto: обновление конфигов [$date UTC]"
+            git pull --rebase origin main
             git push
             echo "✅ Конфиги обновлены и опубликованы"
           else
