@@ -19,6 +19,7 @@ import base64
 import platform
 import signal
 from urllib3.exceptions import InsecureRequestWarning
+from notworkers_db import NotworkersDB
 
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 # ========= КОДИРОВКА UTF-8 ДЛЯ WINDOWS =========
@@ -69,6 +70,7 @@ CACHE_FILE = "cache_results.json"
 DEBUG_FILE = "debug_failed.txt"
 XRAY_LOG_FILE = "xray_errors.log"
 NOTWORKERS_FILE = "configs/notworkers.json"
+NOTWORKERS_DB = "configs/notworkers.db"
 
 # ========= НАСТРОЙКИ =========
 THREADS_DOWNLOAD = _config.getint('threads', 'threads_download', fallback=50)
@@ -973,7 +975,7 @@ async def log(message: str):
 
         async with aiofiles.open(LOG_FILE, "a", encoding="utf-8") as f:
             await f.write(f"[{now}] {message}\n")
-    except:
+    except Exception:
         pass
 
 def log_xray_error(message: str):
@@ -981,7 +983,7 @@ def log_xray_error(message: str):
     try:
         with open(XRAY_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {message}\n")
-    except:
+    except Exception:
         pass
 
 # ========= ВАЛИДАЦИЯ =========
@@ -1088,7 +1090,7 @@ def load_whitelist_domains():
                     domains.add(d)
                     suffixes.append("." + d)
             print(f"📋 Загружено {len(domains)} доменов из whitelist.txt")
-        except:
+        except Exception:
             print("⚠️ Ошибка загрузки whitelist.txt")
 
     return domains, suffixes
@@ -1125,7 +1127,7 @@ def detect_protocol(vless_url: str) -> str:
         if security in ("tls", "xtls"):
             return "TLS"
         return "TCP"
-    except:
+    except Exception:
         return "Неизвестно"
 
 
@@ -1168,7 +1170,7 @@ def extract_sni_or_host(vless_url: str) -> Optional[str]:
                         sni = v
         
         return sni or host
-    except:
+    except Exception:
         return None
 
 
@@ -1215,7 +1217,7 @@ def extract_all_possible_domains(vless_url: str) -> list:
                     k, v = param.split('=', 1)
                     try:
                         v_decoded = urllib.parse.unquote(v).lower()
-                    except:
+                    except Exception:
                         v_decoded = v.lower()
                     
                     if k.lower() == 'sni' and '.' in v_decoded:
@@ -1236,7 +1238,7 @@ def extract_all_possible_domains(vless_url: str) -> list:
                 domain_in_frag = re.findall(r'[a-zA-Z0-9][a-zA-Z0-9\-\.]+[a-zA-Z0-9]\.[a-zA-Z]{2,}', fragment_decoded)
                 for d in domain_in_frag:
                     domains.add(d.lower())
-            except:
+            except Exception:
                 pass
         
         return list(domains)
@@ -1497,7 +1499,7 @@ async def clean_vless():
     try:
         async with aiofiles.open(OUTPUT_FILE, "r", encoding="utf-8") as f:
             lines = await f.readlines()
-    except:
+    except Exception:
         print("Ошибка чтения файла")
         return
 
@@ -1534,7 +1536,7 @@ async def filter_vless():
     try:
         with open(CLEAN_FILE, "r", encoding="utf-8", errors="ignore") as f:
             total = sum(1 for _ in f)
-    except:
+    except Exception:
         total = 0
         
     passed = 0
@@ -1570,7 +1572,7 @@ async def rename_configs():
     try:
         with open(FILTERED_FILE, "r", encoding="utf-8", errors="ignore") as f:
             total = sum(1 for _ in f)
-    except:
+    except Exception:
         total = 0
         
     processed = 0
@@ -1664,7 +1666,7 @@ def encode_vless_url(url: str) -> str:
             else:
                 try:
                     encoded_params.append(f"{k}={urllib.parse.quote(v, safe='')}")
-                except:
+                except Exception:
                     encoded_params.append(f"{k}={v}")
         
         new_params = "&".join(encoded_params) if encoded_params else ""
@@ -1675,7 +1677,7 @@ def encode_vless_url(url: str) -> str:
                     encoded_fragment = urllib.parse.quote(fragment, safe='')
                 else:
                     encoded_fragment = fragment
-            except:
+            except Exception:
                 encoded_fragment = fragment
         else:
             encoded_fragment = ""
@@ -1722,7 +1724,7 @@ async def encode_all_configs():
     try:
         with open(NAMED_FILE, 'r', encoding='utf-8') as f:
             configs = [line.strip() for line in f if line.strip()]
-    except:
+    except Exception:
         print("Ошибка чтения файла")
         return
     
@@ -1752,7 +1754,7 @@ def check_tcp_connection(host: str, port: int, timeout: int = 2) -> bool:
         result = sock.connect_ex((host, port))
         sock.close()
         return result == 0
-    except:
+    except Exception:
         return False
 
 
@@ -1829,136 +1831,7 @@ class PortManager:
             self.used.discard(port)
 
 
-# ========= ЧЁРНЫЙ СПИСОК (NOTWORKERS) =========
-
-def normalize_vless_url(url: str) -> str:
-    """Нормализует VLESS URL — убирает фрагмент (#...) для корректного сравнения"""
-    return url.split('#')[0].strip()
-
-def load_notworkers(filepath: str) -> dict:
-    """Загружает чёрный список нерабочих конфигов (поддерживает версионный и legacy-форматы)"""
-    if not os.path.exists(filepath):
-        return {}
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        # Поддержка версионного формата {"version": 1, "entries": {...}}
-        if isinstance(data, dict) and 'entries' in data:
-            version = data.get('version', 1)
-            if version != 1:
-                print(f"⚠️ Неизвестная версия чёрного списка: {version}, попытка загрузки")
-            entries = data.get('entries', {})
-        else:
-            # Legacy flat format — migrate on next save
-            entries = data
-        # Очистка по TTL
-        now = datetime.now(timezone.utc)
-        cleaned = {}
-        skipped_invalid = 0
-        for key, info in entries.items():
-            try:
-                last_seen = datetime.strptime(info.get('last_seen', ''), '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-                if (now - last_seen).days < NOTWORKERS_TTL_DAYS:
-                    cleaned[key] = info
-            except (ValueError, KeyError):
-                skipped_invalid += 1
-        if skipped_invalid:
-            print(f"⚠️ Пропущено записей с некорректным форматом: {skipped_invalid}")
-        expired = len(entries) - skipped_invalid - len(cleaned)
-        if expired > 0:
-            print(f"🗑️ Очищено из чёрного списка по TTL ({NOTWORKERS_TTL_DAYS}д): {expired} записей")
-        return cleaned
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки чёрного списка: {e}")
-        return {}
-
-def save_notworkers(filepath: str, notworkers: dict):
-    """Сохраняет чёрный список в версионном JSON-формате и в текстовом файле"""
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    try:
-        data = {
-            "version": 1,
-            "entries": notworkers
-        }
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"📝 Чёрный список сохранён: {len(notworkers)} записей")
-    except Exception as e:
-        print(f"⚠️ Ошибка сохранения чёрного списка: {e}")
-
-    # Также сохраняем текстовый файл (один ключ на строку) для совместимости
-    text_filepath = os.path.splitext(filepath)[0]
-    try:
-        with open(text_filepath, 'w', encoding='utf-8') as f:
-            for key in notworkers.keys():
-                f.write(key + '\n')
-    except Exception as e:
-        print(f"⚠️ Ошибка сохранения текстового чёрного списка: {e}")
-
-def update_notworkers(notworkers: dict, failed_urls: list, working_urls: list,
-                      failed_errors: dict = None, notworkers_min_fails: int = 1) -> dict:
-    """Обновляет чёрный список: добавляет нерабочие, удаляет ожившие.
-
-    failed_errors: dict {url: last_error} — причины провала для каждого URL.
-    notworkers_min_fails: минимальное число последовательных провалов для подтверждения.
-    """
-    now_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    if failed_errors is None:
-        failed_errors = {}
-
-    # Удаляем ожившие конфиги
-    working_normalized = {normalize_vless_url(url) for url in working_urls}
-    removed = 0
-    for key in list(notworkers.keys()):
-        if key in working_normalized:
-            del notworkers[key]
-            removed += 1
-    if removed:
-        print(f"✅ Удалено из чёрного списка (ожили): {removed}")
-
-    # Добавляем/обновляем нерабочие
-    added = 0
-    updated = 0
-    for url in failed_urls:
-        key = normalize_vless_url(url)
-        if not key:
-            continue
-        proto = get_protocol_type(url)
-        last_error = failed_errors.get(url)
-        if key in notworkers:
-            notworkers[key]['last_seen'] = now_str
-            notworkers[key]['fail_count'] = notworkers[key].get('fail_count', 1) + 1
-            notworkers[key]['fail_streak'] = notworkers[key].get('fail_streak', 1) + 1
-            if last_error:
-                notworkers[key]['last_error'] = last_error
-            updated += 1
-        else:
-            notworkers[key] = {
-                'raw': url,
-                'first_seen': now_str,
-                'last_seen': now_str,
-                'fail_count': 1,
-                'fail_streak': 1,
-                'protocol': proto
-            }
-            if last_error:
-                notworkers[key]['last_error'] = last_error
-            added += 1
-
-    # Не сбрасываем fail_streak для URL, которые не тестировались в этом цикле.
-    # Если конфиг был отфильтрован чёрным списком (не тестировался), его fail_streak
-    # должен сохраняться, чтобы он оставался заблокированным до истечения TTL.
-    # Конфиги, которые перестали появляться в источниках, будут удалены по TTL
-    # (notworkers_ttl_days), а не через сброс fail_streak.
-
-    confirmed = sum(
-        1 for e in notworkers.values()
-        if e.get('fail_streak', 0) >= notworkers_min_fails
-    )
-    print(f"📊 Чёрный список: +{added} новых, ~{updated} обновлено, -{removed} ожило | "
-          f"Всего: {len(notworkers)} (подтверждено: {confirmed})")
-    return notworkers
-
+# ========= ЧЁРНЫЙ СПИСОК (NOTWORKERS) — SQLite через NotworkersDB =========
 
 class XrayTester:
     def __init__(self, input_file='url_encoded.txt', output_file='url_work.txt',
@@ -2000,11 +1873,8 @@ class XrayTester:
         # Счётчик ошибок по URL (thread-safe) для notworkers
         self._url_last_errors: dict = {}
         self._url_errors_lock = threading.Lock()
+        self._db = None  # NotworkersDB instance, set during test_all()
 
-        # Инкрементальное обновление чёрного списка
-        self._notworkers: dict = {}
-        self._notworkers_lock = threading.Lock()
-        
         self.xray_dir = Path('./xray_bin')
         if sys.platform == 'win32':
             self.xray_path = self.xray_dir / 'xray.exe'
@@ -2113,7 +1983,7 @@ class XrayTester:
                 host, port_str = host_part.split(':', 1)
                 try:
                     port = int(port_str)
-                except:
+                except Exception:
                     port = 443
             else:
                 host = host_part
@@ -2126,7 +1996,7 @@ class XrayTester:
                         k, v = param.split('=', 1)
                         try:
                             v = urllib.parse.unquote(v)
-                        except:
+                        except Exception:
                             pass
                         params[k] = v
             
@@ -2732,12 +2602,12 @@ class XrayTester:
                     time.sleep(0.2)
                     if process.poll() is None:
                         process.kill()
-                except: 
+                except Exception:
                     pass
             if config_file and os.path.exists(config_file):
                 try: 
                     os.remove(config_file)
-                except: 
+                except Exception:
                     pass
 
     def check_geolocation(self, port) -> dict:
@@ -2892,7 +2762,7 @@ class XrayTester:
         try:
             with open(self.input_file, 'r', encoding='utf-8') as f:
                 all_urls = [line.strip() for line in f if line.strip()]
-        except:
+        except Exception:
             print(f"❌ Ошибка чтения файла {self.input_file}")
             return
         
@@ -2900,18 +2770,17 @@ class XrayTester:
             print(f"\n📭 Нет конфигов для тестирования")
             return
 
-        # === Фильтрация по чёрному списку ===
-        notworkers = {}
+        # === Фильтрация по чёрному списку (SQLite) ===
+        db = None
         if NOTWORKERS_ENABLED:
-            notworkers = load_notworkers(NOTWORKERS_FILE)
+            db = NotworkersDB(NOTWORKERS_DB, NOTWORKERS_FILE, ttl_days=NOTWORKERS_TTL_DAYS)
+            self._db = db
+            blocked_keys = db.get_blocked_keys(NOTWORKERS_MIN_FAILS)
             filtered_urls = []
             skipped_count = 0
             for url in all_urls:
-                key = normalize_vless_url(url)
-                entry = notworkers.get(key)
-                # Пропускаем только подтверждённые записи (fail_streak >= порога)
-                # Обратная совместимость: старые записи могут не иметь fail_streak, только fail_count
-                if entry and entry.get('fail_streak', entry.get('fail_count', 0)) >= NOTWORKERS_MIN_FAILS:
+                key = url.split('#')[0].strip()
+                if key in blocked_keys:
                     skipped_count += 1
                 else:
                     filtered_urls.append(url)
@@ -2920,10 +2789,8 @@ class XrayTester:
             all_urls = filtered_urls
             if not all_urls:
                 print(f"\n📭 Все конфиги в чёрном списке")
+                db.close()
                 return
-
-        # Сохраняем ссылку на notworkers в self для SIGTERM-обработчика
-        self._notworkers = notworkers
 
         print(f"\n{'='*60}")
         print(f"🔍 Тестирование {len(all_urls)} конфигов")
@@ -2940,22 +2807,15 @@ class XrayTester:
 
         # === SIGTERM-обработчик для graceful shutdown (GitHub Actions таймаут) ===
         def _sigterm_handler(signum, frame):
-            print(f"\n⚠️ Получен сигнал {signum}, сохраняю чёрный список перед завершением...")
-            if NOTWORKERS_ENABLED:
-                with self._notworkers_lock:
-                    save_notworkers(NOTWORKERS_FILE, self._notworkers)
+            print(f"\n⚠️ Получен сигнал {signum}, завершаю...")
+            if NOTWORKERS_ENABLED and hasattr(self, '_db') and self._db:
+                self._db.close()
             sys.exit(1)
 
         _is_main_thread = threading.current_thread() is threading.main_thread()
         old_sigterm = None
         if _is_main_thread:
             old_sigterm = signal.signal(signal.SIGTERM, _sigterm_handler)
-
-        # Параметры инкрементального сохранения
-        _incremental_save_interval = 200  # сохранять каждые 200 проверенных конфигов
-        _incremental_save_time = 30       # или каждые 30 секунд
-        _last_save_count = 0
-        _last_save_time = time.time()
 
         try:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -2969,58 +2829,22 @@ class XrayTester:
                             working.append(result)
                             progress.update('✅', working=True)
                             # Удаляем ожившие конфиги из чёрного списка
-                            if NOTWORKERS_ENABLED:
-                                key = normalize_vless_url(url)
-                                with self._notworkers_lock:
-                                    notworkers.pop(key, None)
+                            if NOTWORKERS_ENABLED and db:
+                                db.remove_working(url)
                         else:
                             progress.update('❌', working=False)
-                            # Инкрементально обновляем чёрный список в памяти
-                            if NOTWORKERS_ENABLED:
-                                key = normalize_vless_url(url)
-                                if key:
-                                    now_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                                    with self._url_errors_lock:
-                                        last_error = self._url_last_errors.get(url)
-                                    with self._notworkers_lock:
-                                        if key in notworkers:
-                                            notworkers[key]['last_seen'] = now_str
-                                            notworkers[key]['fail_count'] = notworkers[key].get('fail_count', 1) + 1
-                                            notworkers[key]['fail_streak'] = notworkers[key].get('fail_streak', 1) + 1
-                                            if last_error:
-                                                notworkers[key]['last_error'] = last_error
-                                        else:
-                                            entry = {
-                                                'raw': url,
-                                                'first_seen': now_str,
-                                                'last_seen': now_str,
-                                                'fail_count': 1,
-                                                'fail_streak': 1,
-                                                'protocol': get_protocol_type(url)
-                                            }
-                                            if last_error:
-                                                entry['last_error'] = last_error
-                                            notworkers[key] = entry
+                            # Обновляем чёрный список (SQLite)
+                            if NOTWORKERS_ENABLED and db:
+                                with self._url_errors_lock:
+                                    last_error = self._url_last_errors.get(url)
+                                db.add_failed(url, get_protocol_type(url), last_error)
                     except Exception as e:
                         progress.update('⚠️', working=False)
-
-                    # Периодическое сохранение на диск
-                    if NOTWORKERS_ENABLED:
-                        _checked = progress.current
-                        _now_time = time.time()
-                        if (_checked - _last_save_count >= _incremental_save_interval or
-                                _now_time - _last_save_time >= _incremental_save_time):
-                            with self._notworkers_lock:
-                                save_notworkers(NOTWORKERS_FILE, notworkers)
-                            _last_save_count = _checked
-                            _last_save_time = _now_time
         finally:
             if _is_main_thread and old_sigterm is not None:
                 signal.signal(signal.SIGTERM, old_sigterm)
-            # Гарантируем сохранение при любом завершении (в т.ч. исключениях)
-            if NOTWORKERS_ENABLED:
-                with self._notworkers_lock:
-                    save_notworkers(NOTWORKERS_FILE, notworkers)
+            if NOTWORKERS_ENABLED and db:
+                db.close()
             with self._url_errors_lock:
                 self._url_last_errors.clear()
 
@@ -3061,14 +2885,10 @@ class XrayTester:
         print('='*60 + '\n')
 
         # === Итоговая статистика чёрного списка ===
-        # Инкрементальные обновления уже выполнены внутри цикла проверки.
-        # Финальное сохранение гарантируется блоком finally выше.
-        if NOTWORKERS_ENABLED:
-            confirmed = sum(
-                1 for e in notworkers.values()
-                if e.get('fail_streak', 0) >= NOTWORKERS_MIN_FAILS
-            )
-            print(f"📊 Чёрный список итого: {len(notworkers)} записей (подтверждено: {confirmed})")
+        if NOTWORKERS_ENABLED and db:
+            total = db.count()
+            confirmed = db.count_confirmed(NOTWORKERS_MIN_FAILS)
+            print(f"📊 Чёрный список итого: {total} записей (подтверждено: {confirmed})")
         
         return working
 
@@ -3260,7 +3080,7 @@ async def main_cycle():
     try:
         with open(SOURCES_FILE, "r", encoding="utf-8", errors="ignore") as f:
             urls = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
-    except:
+    except Exception:
         print(f"❌ Ошибка чтения {SOURCES_FILE}")
         return
 
@@ -3316,18 +3136,16 @@ async def main_cycle():
         print("⏭️ Нет конфигов для проверки")
         return
 
-    # Фильтрация по чёрному списку перед передачей в XrayTester
+    # Фильтрация по чёрному списку перед передачей в XrayTester (SQLite)
     if NOTWORKERS_ENABLED:
-        notworkers_data = load_notworkers(NOTWORKERS_FILE)
+        pre_filter_db = NotworkersDB(NOTWORKERS_DB, NOTWORKERS_FILE, ttl_days=NOTWORKERS_TTL_DAYS)
         pre_filter_count = len(urls_to_test)
-        confirmed_keys = {
-            key for key, entry in notworkers_data.items()
-            if entry.get('fail_streak', entry.get('fail_count', 0)) >= NOTWORKERS_MIN_FAILS
-        }
-        urls_to_test = [url for url in urls_to_test if normalize_vless_url(url) not in confirmed_keys]
+        confirmed_keys = pre_filter_db.get_blocked_keys(NOTWORKERS_MIN_FAILS)
+        urls_to_test = [url for url in urls_to_test if url.split('#')[0].strip() not in confirmed_keys]
         filtered_count = pre_filter_count - len(urls_to_test)
         if filtered_count:
             print(f"⚫ Отфильтровано по чёрному списку (до XrayTester): {filtered_count} конфигов")
+        pre_filter_db.close()
 
     print(f"\n📋 Итого для проверки: {len(urls_to_test)} конфигов")
     with open(COMBINED_FILE, 'w', encoding='utf-8') as f:
