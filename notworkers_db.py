@@ -14,6 +14,8 @@ class NotworkersDB:
         self.db_path = db_path
         self.ttl_days = ttl_days
         self._lock = threading.Lock()
+        self._pending_writes = 0
+        self._batch_size = 50
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
@@ -99,7 +101,10 @@ class NotworkersDB:
                     fail_streak = fail_streak + 1,
                     last_error = COALESCE(?, last_error)
             """, (key, url, protocol, now_str, now_str, error, now_str, error))
-            self.conn.commit()
+            self._pending_writes += 1
+            if self._pending_writes >= self._batch_size:
+                self.conn.commit()
+                self._pending_writes = 0
 
     def remove_working(self, url):
         """Удаляет ожившие конфиги"""
@@ -145,10 +150,33 @@ class NotworkersDB:
             "SELECT COUNT(*) FROM notworkers WHERE fail_streak >= ?", (min_fails,)
         ).fetchone()[0]
 
+    def checkpoint(self):
+        """Сбрасывает WAL-журнал в основной файл БД (периодическое сохранение)"""
+        try:
+            with self._lock:
+                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception as e:
+            print(f"⚠️ Ошибка checkpoint: {e}")
+
+    def flush(self):
+        """Принудительный commit + checkpoint"""
+        try:
+            with self._lock:
+                if self._pending_writes > 0:
+                    self.conn.commit()
+                    self._pending_writes = 0
+                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception as e:
+            print(f"⚠️ Ошибка flush: {e}")
+
     def close(self):
         try:
-            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            self.conn.close()
+            with self._lock:
+                if self._pending_writes > 0:
+                    self.conn.commit()
+                    self._pending_writes = 0
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self.conn.close()
         except Exception:
             pass
         # Удаляем WAL/SHM файлы чтобы не мешать git операциям

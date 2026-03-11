@@ -3005,6 +3005,7 @@ class XrayTester:
         def _sigterm_handler(signum, frame):
             print(f"\n⚠️ Получен сигнал {signum}, завершаю...")
             if NOTWORKERS_ENABLED and hasattr(self, '_db') and self._db:
+                self._db.flush()
                 self._db.close()
             sys.exit(1)
 
@@ -3017,6 +3018,11 @@ class XrayTester:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = {executor.submit(self.test_one, url): url for url in all_urls}
                 
+                checkpoint_counter = 0
+                last_checkpoint_time = time.time()
+                CHECKPOINT_EVERY_N = 200
+                CHECKPOINT_EVERY_SEC = 60
+
                 for future in as_completed(futures):
                     url = futures[future]
                     try:
@@ -3036,9 +3042,23 @@ class XrayTester:
                                 db.add_failed(url, get_protocol_type(url), last_error)
                     except Exception as e:
                         progress.update('⚠️', working=False)
+
+                    # === Периодический checkpoint БД ===
+                    checkpoint_counter += 1
+                    now = time.time()
+                    if NOTWORKERS_ENABLED and db and (
+                        checkpoint_counter >= CHECKPOINT_EVERY_N
+                        or now - last_checkpoint_time >= CHECKPOINT_EVERY_SEC
+                    ):
+                        db.flush()
+                        checkpoint_counter = 0
+                        last_checkpoint_time = now
         finally:
             if _is_main_thread and old_sigterm is not None:
                 signal.signal(signal.SIGTERM, old_sigterm)
+            # Финальный flush БД перед завершением
+            if NOTWORKERS_ENABLED and db:
+                db.flush()
             with self._url_errors_lock:
                 self._url_last_errors.clear()
 
