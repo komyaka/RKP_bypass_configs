@@ -7,6 +7,10 @@ https://raw.githubusercontent.com/vpnineh/config/main/sub/mix_protocol/mix_vless
 https://github.com/Urbanica/vpn-sub/raw/main/sub.txt
 https://raw.githubusercontent.com/Omid-0x0x0x/vless/main/configs/vless_config_80.txt
 https://github.com/LimeHi/LimeVPN/raw/main/LimeVPN.txt
+https://raw.githubusercontent.com/Firmfox/Proxify/refs/heads/main/v2ray_configs/seperated_by_protocol/vmess.txt
+https://raw.githubusercontent.com/Firmfox/Proxify/refs/heads/main/v2ray_configs/seperated_by_protocol/other.txt
+https://raw.githubusercontent.com/Delta-Kronecker/V2ray-Config/refs/heads/main/config/protocols/trojan.txt
+https://raw.githubusercontent.com/Delta-Kronecker/V2ray-Config/refs/heads/main/config/protocols/vmess.txt
 https://github.com/WhitePrime/xraycheck/raw/main/configs/white-list_available_st
 https://raw.githubusercontent.com/OZRED/vless/refs/heads/main/BezRF
 https://raw.githubusercontent.com/WhitePrime/xraycheck/main/configs/white-list_available_st
