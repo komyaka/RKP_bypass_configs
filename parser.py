@@ -3383,6 +3383,38 @@ async def _run_cycle_logic(notworkers_db):
         print("⏭️ Нет конфигов для проверки")
         return
 
+    # === GEO-предфильтр: оставляем только Russia и Unknown ДО Xray ===
+    ALLOWED_GEO = {"russia", "unknown"}
+    hosts_for_geo = []
+    for url in urls_to_test:
+        host = extract_host_ip(url.split('#', 1)[0])
+        hosts_for_geo.append(host or "")
+
+    unique_ips_geo = list({h for h in hosts_for_geo if h})
+    if unique_ips_geo:
+        print(f"\n🌍 GEO-предфильтр: определяю страны для {len(unique_ips_geo)} уникальных IP...")
+        ip_geo_info = get_countries_batch(unique_ips_geo)
+
+        geo_filtered = []
+        geo_blocked_count = 0
+        for url, host in zip(urls_to_test, hosts_for_geo):
+            info = ip_geo_info.get(host, {"country": "Unknown", "countryCode": ""})
+            country = info.get("country", "Unknown") or "Unknown"
+            if country.lower() in ALLOWED_GEO:
+                geo_filtered.append(url)
+            else:
+                geo_blocked_count += 1
+                if NOTWORKERS_ENABLED and notworkers_db:
+                    notworkers_db.add_failed(url, get_protocol_type(url), f"GEO_BLOCKED:{country}")
+
+        if geo_blocked_count:
+            print(f"🌍 Отсеяно по геолокации: {geo_blocked_count} конфигов (не RU/Unknown)")
+        urls_to_test = geo_filtered
+
+        if not urls_to_test:
+            print("📭 Все конфиги отсеяны по геолокации")
+            return
+
     # Единственный экземпляр notworkers_db передаётся в XrayTester для фильтрации
     # по чёрному списку и записи ошибок — одно соединение с БД на весь цикл.
 
