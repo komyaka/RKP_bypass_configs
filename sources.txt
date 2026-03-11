@@ -1,10 +1,7 @@
-https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt
-https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt
-https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/githubmirror/new/by_protocol/vless/vless_003.txt
-https://github.com/4n0nymou3/multi-proxy-config-fetcher/raw/main/configs/proxy_configs.txt
-https://github.com/4n0nymou3/multi-proxy-config-fetcher/raw/refs/heads/main/configs/proxy_configs_tested.txt
-https://github.com/ShatakVPN/ConfigForge-V2Ray/raw/main/configs/all.txt
-https://raw.githubusercontent.com/4n0nymou3/multi-proxy-config-fetcher/main/configs/proxy_configs.txt
-https://raw.githubusercontent.com/4n0nymou3/multi-proxy-config-fetcher/main/configs/proxy_configs_tested.txt
-https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/all.txt
-https://raw.githubusercontent.com/OZRED/vless/refs/heads/main/ozred_bot
+https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/refs/heads/main/Countries/Russia.txt
+https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile-2.txt
+https://raw.githubusercontent.com/nscl5/5/main/configs/all.txt
+https://github.com/Mr-Meshky/vify/raw/main/configs/all.txt
+https://raw.githubusercontent.com/Argh94/V2RayAutoConfig/refs/heads/main/configs/Vless.txt
+https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/All_Configs_Sub.txt
+https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/refs/heads/main/all_configs.txt
