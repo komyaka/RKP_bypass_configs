@@ -20,7 +20,7 @@ jobs:
   update-configs:
     name: Парсинг и обновление конфигов
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 58
 
     steps:
       - name: Клонирование репозитория
@@ -52,7 +52,7 @@ jobs:
 
       - name: Запуск парсера (один цикл)
         run: python parser.py --once
-        timeout-minutes: 55
+        timeout-minutes: 59
 
       - name: Копирование результатов в папку configs
         run: |
